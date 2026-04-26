@@ -4,9 +4,18 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function proxy(request: NextRequest) {
     let supabaseResponse = NextResponse.next({ request });
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    // Fail open when env vars are missing (e.g., misconfigured deployment) to avoid 500s.
+    // Auth-protected routes will still enforce auth in server components/routes where applicable.
+    if (!supabaseUrl || !supabaseAnonKey) {
+        return supabaseResponse;
+    }
+
     const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        supabaseUrl,
+        supabaseAnonKey,
         {
             cookies: {
                 getAll() {
@@ -28,9 +37,16 @@ export async function proxy(request: NextRequest) {
         }
     );
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
+    let user = null;
+    try {
+        const {
+            data: { user: authUser },
+        } = await supabase.auth.getUser();
+        user = authUser;
+    } catch {
+        // If Supabase is unreachable at edge/runtime, do not crash middleware.
+        return supabaseResponse;
+    }
 
     // Rate limiting for redirect route (simple in-memory approach)
     // For production, use Upstash Redis
